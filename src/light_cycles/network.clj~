@@ -1,0 +1,5 @@
+(ns light-cycles.network)
+
+(def code-to-keyword [:left :right :up :down])
+(def keyword-to-code (into {} (for [index (range (count code-to-keyword))]
+				[(code-to-keyword index) index])))

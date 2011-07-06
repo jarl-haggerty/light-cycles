@@ -1,0 +1,3 @@
+(ns light-cycles.communication)
+
+(def keywords [:left :right :up :down])
