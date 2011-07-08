@@ -1,0 +1,9 @@
+(ns light-cycles.clock
+  (:use light-cycles.actor))
+
+(defrecord Clock []
+  (update [this])
+  (render [this]))
+
+(defmethod create :clock [info]
+	   (Clock. (Date. (System/currentTimeMillis))))

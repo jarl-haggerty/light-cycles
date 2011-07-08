@@ -1,0 +1,67 @@
+(ns light-cycles.client
+  (:require [light-cycles.server :as server]))
+
+(def state (atom {:synced nil :predicted nil}))
+
+(defn nested-merger [map1 map2]
+  (into {}
+	(filter
+	 second
+	 (merge-with #(if (map? %2)
+			(nested-merge %1 %2)
+			%2)
+		     map1 map2))))
+
+(defn merge-states [state1 state2]
+  (into {} (for [[k v] (filter #(state2 (first %) :not-in-map) state1)]
+	     [k
+	      (nested-merge v (state2 k))])))
+
+(defn start-sync-loop []
+  (doto (Timer. 33 (proxy [ActionListener] []
+		     (actionPerformed [_]
+				      (.writeByte network/output server/request-header)
+				      (let [server-state (network/receive)
+					    synced-state (merge-states (:synced @state) server-state)])
+				      (swap! state (fn [_] {:synced synced-state
+							    :predicted synced-state})))))
+    (.start)))
+
+(defn update [state]
+  (into {} (for [[key actor] state]
+	     [key (merge actor (actor/update actor))])))
+
+(defn start-game-loop []
+  (doto (Timer. 16 (proxy [ActionListener] []
+		     (actionPerformed [_]
+				      (.writeByte network/output server/request-header)
+				      (swap! state #(assoc % :predicted (update (:predicted %)))))))
+    (.start)))
+
+(defn render [state]
+  (doseq [[_ actor] state]
+    (render actor)))
+
+(defn start-render-loop []
+  (doto (Timer. 16 (proxy [ActionListener] []
+		     (actionPerformed [_]
+				      (render (:predicted @state)))))
+    (.start)))
+
+(defn info [address port]
+  (let [socket (Socket. address port)]
+    (binding [network/input (DataInputStream. (.getInputStream socket))
+	      network/output (DataOutputStream. (.getOutputStream socket))
+	      network/codec (transient {})]
+      (.writeByte network/output server/info-header)
+      (network/receive))))
+
+(defn connect [address port]
+  (let [socket (Socket. address port)]
+    (binding [network/input (DataInputStream. (.getInputStream socket))
+	      network/output (DataOutputStream. (.getOutputStream socket))
+	      network/codec (transient {})]
+      (.writeByte network/output server/connect-header)
+      (start-sync-loop)
+      (start-game-loop)
+      (start-render-loop))))
