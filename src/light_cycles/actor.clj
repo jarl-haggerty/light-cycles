@@ -1,7 +1,5 @@
 (ns light-cycles.actor)
 
-(defprotocol Actor
-  (update [this])
-  (render [this graphics]))
-
+(defmulti update :role)
+(defmulti render :role)
 (defmulti create :role)

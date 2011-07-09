@@ -1,4 +1,5 @@
-(ns light-cycles.network)
+(ns light-cycles.network
+  (:import java.util.Date))
 
 (def keyword-header 0)
 (def raw-header 1)
@@ -9,8 +10,12 @@
 (def map-header 6)
 (def more-header 7)
 (def done-header 8)
+(def object-header 9)
 
 (def codec)
+(def object-codec
+     {Date [0 #(.getTime %)]
+      0 #(Date. %1)})
 (def input)
 (def output)
 
@@ -50,13 +55,22 @@
     (send v))
   (.writeByte output done-header))
 
+(defn send-object [object]
+  (.writeByte output object-header)
+  (let [[header & encoder] (object-codec (type object))]
+    (.writeByte output header)
+    (.writeByte output (count encoder))
+    (doseq [e encoder]
+      (send (e object)))))
+
 (defn send [item]
   (cond
    (associative? item) (send-map item)
    (keyword? item) (send-keyword item)
    (string? item) (send-string item)
    (integer? item) (send-long item)
-   (float? item) (send-double item)))
+   (float? item) (send-double item)
+   :else (send-object item)))
 
 
 					;---------------------------receive-------------------------------------------
@@ -94,10 +108,17 @@
 	(recur (assoc accum key value)))
       accum)))
 
+(defn receive-object []
+  (let [decoder (object-codec (int (.readByte input)))
+	data (doall (for [_ (range (.readByte input))]
+		      (receive)))]
+    (apply decoder data)))
+
 (defn receive []
   (condp = (.readByte input)
       map-header (receive-map)
       keyword-header (receive-keyword)
       string-header (receive-string)
       long-header (receive-long)
-      double-header (receive-double)))
+      double-header (receive-double)
+      object-header (receive-object)))

@@ -39,7 +39,7 @@
 	       synced-state (nested-merge (:synced @state) server-state)]
 	   (swap! state (fn [_] {:synced synced-state
 				 :predicted synced-state}))
-	   	   (println server-state synced-state (- 1000 (- (System/currentTimeMillis) time))))
+	   (println server-state synced-state (- 1000 (- (System/currentTimeMillis) time))))
 	 (Thread/sleep (max 0 (- 1000 (- (System/currentTimeMillis) time))))
 	 (recur (System/currentTimeMillis))))
      (catch Exception e (println e)))))

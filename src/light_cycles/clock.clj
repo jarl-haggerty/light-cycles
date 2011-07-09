@@ -3,13 +3,10 @@
 	   java.awt.Color)
   (:use light-cycles.actor))
 
-(defrecord Clock [time other]
-  Actor
-  (update [this]
-	  {:time (System/currentTimeMillis)})
-  (render [this graphics]
-	  (.setColor Color/black)
-	  (.drawString graphics 0 0 (-> time Date. .toString))))
-
+(defmethod update :clock [{initial-time :initial-time}]
+	   {:time (Date. (- (System/currentTimeMillis) initial-time))})
+(defmethod render :clock [{time :time} graphics]
+  (.setColor Color/black)
+  (.drawString graphics 0 0 (.toString time)))
 (defmethod create :clock [info]
-	   (Clock. (System/currentTimeMillis) "hello"))
+	   {:role :clock :time (Date. (long 0)) :initial-time (System/currentTimeMillis) :other "hello"})
