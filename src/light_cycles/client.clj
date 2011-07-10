@@ -1,6 +1,8 @@
 (ns light-cycles.client
   (:import javax.swing.Timer
+	   javax.swing.JFrame
 	   java.awt.event.ActionListener
+	   java.awt.event.KeyListener
 	   java.net.Socket
 	   java.io.DataInputStream
 	   java.io.DataOutputStream)
@@ -9,6 +11,19 @@
 	    [light-cycles.actor :as actor]))
 
 (def state (atom {:synced nil :predicted nil}))
+(def input (atom {:input []}))
+
+(def key-listener (proxy [KeyListener] []
+		    (keyPressed [event]
+				(swap! input #(hash-map :input (conj (:input %) :reset))))
+		    (keyReleased [event])
+		    (keyTyped [event])))
+
+(def frame (doto (JFrame. "Light Cycles")
+	     (.setSize 500 500)
+	     (.setLocationRelativeTo nil)
+	     (.addKeyListener key-listener)
+	     (.setVisible true)))
 
 (defn nested-merge [state1 state2]
 ;  (println 'nested-merge state1 state2)
@@ -21,19 +36,24 @@
 		  state1 state2)
 	 [key & more-keys] (keys current)]
     (if key
-      (if (= (get current key) server/drop)
+      (if (= (get current key) server/drop-element)
 	(recur (dissoc current key) more-keys)
 	(recur current more-keys))
       current)))
 
-(defn start-sync-loop [input output codec]
+(defn start-sync-loop [input-stream output-stream codec]
   (future
    (try
      (doto (Thread/currentThread) (.setName "Sync Loop"))
-     (binding [network/input input
-	       network/output output
+     (binding [network/input input-stream
+	       network/output output-stream
 	       network/codec codec]
        (loop [time (System/currentTimeMillis)]
+	 (let [input (:collector (swap! input #(hash-map :input [] :collector (:input %))))]
+	   (.writeByte network/output server/input-header)
+	   (.writeByte network/output (count input))
+	   (doseq [i input]
+	     (network/send i)))
 	 (.writeByte network/output server/request-header)
 	 (let [server-state (network/receive)
 	       synced-state (nested-merge (:synced @state) server-state)]

@@ -12,9 +12,10 @@
 (def connect-header 1)
 (def request-header 2)
 (def input-header 3)
-(def drop ::drop)
+(def drop-element ::drop)
 
 (def state (atom {}))
+(def input (atom {:input []}))
 
 (defn nested-merge [state1 state2]
 ;  (println 'nested-merge state1 state2)
@@ -27,16 +28,20 @@
 		  state1 state2)
 	 [key & more-keys] (keys current)]
     (if key
-      (if (= (get current key) drop)
+      (if (= (get current key) drop-element)
 	(recur (dissoc current key) more-keys)
 	(recur current more-keys))
       current)))
+
+(defn flush-input []
+  (:collector (swap! input #(hash-map :input [] :collector (:input %)))))
 
 (defn start-update-loop [state]
   (future
    (doto (Thread/currentThread) (.setName "Server Update Loop"))
    
-   (loop [time (System/currentTimeMillis)]
+   (loop [time (System/currentTimeMillis) input (flush-input)]
+;     (println 'handle-input input)
 ;     (println 'updating state)
      (swap! state
 	    (fn [{state :state old-delta :delta}]
@@ -45,14 +50,27 @@
 		
 	      (let [delta (into {} (for [[k v] state]
 					;				     (do (println k v))
-				     [k (actor/update v)]))]
+				     [k (merge (actor/update v)
+					       (actor/process-input v input))]))]
 ;		(println 'deltas delta)
 		{:state (nested-merge state delta)
 		 :delta (nested-merge old-delta delta)})))
  ;     (println 'updated)
      (Thread/sleep (max 0 (- 500 (- (System/currentTimeMillis) time))))
   ;     (println 'slept)
-     (recur (System/currentTimeMillis)))))
+     (recur (System/currentTimeMillis) (flush-input)))))
+
+(defn process-input [state input]
+  (swap! state
+	 (fn [{state :state old-delta :delta}]
+					;	      (println 'hello)
+					;	      (println 'bye state)
+	   (let [delta (into {} (for [[k v] state]
+					;				     (do (println k v))
+				  [k (actor/process-input v input)]))]
+					;		(println 'deltas delta)
+	     {:state (nested-merge state delta)
+	      :delta (nested-merge old-delta delta)}))))
 
 (defn game-loop [initial-state]
   (Thread/sleep 1000)
@@ -69,7 +87,12 @@
 								    :collector delta})))]
 ;			     (println 'sending delta)
 			     (network/send delta)))
-	  input-header (network/receive))
+	  input-header (let [new-input (vec (for [_ (range (.readByte network/input))]
+					      (network/receive)))]
+;			 (println 'new-input new-input)
+			 (swap! input #(hash-map :input (into (:input %) new-input)))
+					;			 (println 'new-input-after input)
+			 ))
       (recur))))
 
 (defn send-info []

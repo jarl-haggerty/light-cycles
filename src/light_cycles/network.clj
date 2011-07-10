@@ -1,5 +1,8 @@
 (ns light-cycles.network
-  (:import java.util.Date))
+  (:import java.util.Date
+	   java.net.Socket
+	   java.io.DataInputStream
+	   java.io.DataOutputStream))
 
 (def keyword-header 0)
 (def raw-header 1)
@@ -49,11 +52,10 @@
 
 (defn send-map [map]
   (.writeByte output map-header)
+  (.writeByte output (count map))
   (doseq [[k v] map]
-    (.writeByte output more-header)
     (send k)
-    (send v))
-  (.writeByte output done-header))
+    (send v)))
 
 (defn send-object [object]
   (.writeByte output object-header)
@@ -101,12 +103,8 @@
       keyword)))
 
 (defn receive-map []
-  (loop [accum {}]
-    (if (= (.readByte input) more-header)
-      (let [key (receive)
-	    value (receive)]
-	(recur (assoc accum key value)))
-      accum)))
+  (into {} (for [_ (range (.readByte input))]
+	     [(receive) (receive)])))
 
 (defn receive-object []
   (let [decoder (object-codec (int (.readByte input)))
@@ -122,3 +120,14 @@
       long-header (receive-long)
       double-header (receive-double)
       object-header (receive-object)))
+
+(defn connect [address port object-codec]
+  (let [socket (Socket. address port)]
+    {:input (-> socket
+		.getInputStream
+		DataInputStream.)
+     :output (-> socket
+		.getOutputStream
+		DataOutputStream.)
+     :keyword-codec (atom {})
+     :object-codec object-codec}))
