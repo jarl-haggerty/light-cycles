@@ -14,106 +14,62 @@
 (def input-header 3)
 (def drop-element ::drop)
 
-(def state (atom {}))
-(def input (atom {:input []}))
+(defn flush-input [input]
+  (:collector (swap! input #(assoc %
+			      :input []
+			      :collector (:input %)))))
 
-(defn nested-merge [state1 state2]
-;  (println 'nested-merge state1 state2)
-  (loop [current (merge-with
-		  (fn [x y]
-;		    (println "    " x y)
-		    (if (and (associative? x) (associative? y))
-		      (do  (nested-merge x y))
-		      (do  y)))
-		  state1 state2)
-	 [key & more-keys] (keys current)]
-    (if key
-      (if (= (get current key) drop-element)
-	(recur (dissoc current key) more-keys)
-	(recur current more-keys))
-      current)))
-
-(defn flush-input []
-  (:collector (swap! input #(hash-map :input [] :collector (:input %)))))
-
-(defn start-update-loop [state]
+(defn start-updater-thread [state input]
   (future
-   (doto (Thread/currentThread) (.setName "Server Update Loop"))
-   
-   (loop [time (System/currentTimeMillis) input (flush-input)]
-;     (println 'handle-input input)
-;     (println 'updating state)
+   (loop [time (System/currentTimeMillis) collected-input (flush-input input)]
      (swap! state
-	    (fn [{state :state old-delta :delta}]
-;	      (println 'hello)
-;	      (println 'bye state)
-		
-	      (let [delta (into {} (for [[k v] state]
-					;				     (do (println k v))
-				     [k (merge (actor/update v)
-					       (actor/process-input v input))]))]
-;		(println 'deltas delta)
-		{:state (nested-merge state delta)
-		 :delta (nested-merge old-delta delta)})))
- ;     (println 'updated)
+	    (fn [{state :state deltas :deltas :as root}]
+	      (let [new-delta (into {} (for [[k v] state]
+					 [k (nested-merge (actor/update v)
+							  (actor/process-input v collected-input))]))]
+		(-> root
+		    (assoc :state (nested-merge state new-delta))
+		    (assoc :deltas (into deltas (for [[connection delta] deltas]
+						  [connection (nested-merge delta new-delta)])))))))
      (Thread/sleep (max 0 (- 500 (- (System/currentTimeMillis) time))))
-  ;     (println 'slept)
-     (recur (System/currentTimeMillis) (flush-input)))))
+     (recur (System/currentTimeMillis) (flush-input input)))))
 
-(defn process-input [state input]
-  (swap! state
-	 (fn [{state :state old-delta :delta}]
-					;	      (println 'hello)
-					;	      (println 'bye state)
-	   (let [delta (into {} (for [[k v] state]
-					;				     (do (println k v))
-				  [k (actor/process-input v input)]))]
-					;		(println 'deltas delta)
-	     {:state (nested-merge state delta)
-	      :delta (nested-merge old-delta delta)}))))
-
-(defn game-loop [initial-state]
-  (Thread/sleep 1000)
-  (let [state (atom {:state initial-state
-		     :delta initial-state})]
-    (start-update-loop state)
-    (loop []
-;      (println 'listening)
-      (condp = (.readByte network/input)
+(defn start-network-thread [connection state input]
+  (loop []
+      (condp = (network/receive connection)
 	  request-header (do
-;			   (println 'sending)
-			   (let [delta  (:collector (swap! state (fn [{state :state delta :delta}]
-								   {:state state :delta {}
-								    :collector delta})))]
-;			     (println 'sending delta)
-			     (network/send delta)))
-	  input-header (let [new-input (vec (for [_ (range (.readByte network/input))]
-					      (network/receive)))]
-;			 (println 'new-input new-input)
-			 (swap! input #(hash-map :input (into (:input %) new-input)))
-					;			 (println 'new-input-after input)
-			 ))
-      (recur))))
+			   (let [delta (get-in (swap! state #(-> %
+								 (assoc-in [:collector connection] (get-in % [:deltas connection]))
+								 (assoc-in [:deltas connection] nil)))
+					       [:collector connection])]
+			     (println 'delta delta)
+			     (network/send connection delta)))
+	  input-header (let [new-input (vec (for [_ (range (network/read-byte connection))]
+					      (network/receive connection)))]
+			 (swap! input #(hash-map :input (into (:input %) new-input)))))
+      (recur)))
 
-(defn send-info []
-  (network/send {:game "Light Cycles" :players 20 :map {:name "Box" :size 23.5}})
-  (println 'server (persistent! network/codec)))
-
-(defn start [port initial-state]
-  (let [connections (atom [])]
-    (create-server port (fn [in out]
-			  (binding [network/input (DataInputStream. in)
-				    network/output (DataOutputStream. out)
-				    network/codec (atom {})]
-			    (condp = (.readByte network/input) 
-				info-header (send-info)
-				connect-header (game-loop initial-state)))))))
-
-(comment (start 4000)
-	 (def socket (Socket. "localhost" 4000))
-	 (binding [network/input (DataInputStream. (.getInputStream socket))
-		   network/output (DataOutputStream. (.getOutputStream socket))
-		   network/codec (atom {})]
-	   (.writeByte network/output info-header)
-	   (println 'hello (network/receive))
-	   (println 'client (persistent! network/codec))))
+(defn create [{port :port
+	       object-codec :object-codec
+	       info-handler :info-handler
+	       connection-handler :connection-handler
+	       state :state}]
+  (let [state (atom {:state state :deltas {}})
+	input (atom {:input []})]
+    (start-updater-thread state input)
+    (create-server port (fn [input output]
+			  (let [connection (network/connection-from-streams input output object-codec)]
+			    (condp = (network/receive connection)
+				info-header (if-let [info (info-handler connection state)]
+					      (do (network/send connection 1)
+						  (network/send connection info))
+					      (network/send connection 0))
+				connect-header (if-let [delta (connection-handler connection state)]
+						 (do (network/send connection 1)
+						     (swap! state (fn [{state :state deltas :deltas :as root}]
+								    (let [new-state (nested-merge state delta)]
+								      (-> root
+									  (assoc :state new-state)
+									  (assoc-in [:deltas connection] new-state)))))
+						     (start-network-thread connection state input))
+						 (network/send connection 0))))))))

@@ -1,0 +1,16 @@
+(ns light-cycles.light-cycles-server)
+
+(defn info-handler [connection state]
+  (network/send connection {}))
+
+(defn connection-handler [connection state]
+  (let [accepted (condp = nil
+		     (:player-1 state) {:player-1 {:position [100 100]}}
+		     (:player-2 state) {:player-2 {:position [900 900]}}
+		     (:player-3 state) {:player-3 {:position [900 100]}}
+		     (:player-4 state) {:player-4 {:position [100 900]}}
+		     nil)]
+    (if accepted
+      (network/write-byte connection 1)
+      (network/write-byte connection 0))
+    accepted))
